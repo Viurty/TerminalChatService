@@ -135,7 +135,6 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterChatServiceServer(grpcServer, &server{clients: make(map[pb.ChatService_ChatServer]int), ban_words: words})
-	log.Println("gRPC-сервер запущен на порту 50051...")
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Fatalf("Ошибка работы gRPC-сервера: %v", err)
 	}
