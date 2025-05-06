@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package api;
+
+option go_package = "example.com/myapp/api";
+
+message ChatMessage {
+  UserRole role = 1;
+  bool isServer = 2;
+  string name = 3;
+  string text = 4;
+}
+
+enum UserRole {
+    CLIENT = 0;
+    ADMIN = 1;
+}
+  
+
+service ChatService {
+  rpc Chat(stream ChatMessage) returns (stream ChatMessage);
+}
