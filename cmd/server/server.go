@@ -106,6 +106,9 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 
 func isBan(words []string, msg string) bool {
 	for _, word := range words {
+		if word == "" {
+			continue
+		}
 		if strings.Contains(msg, word) {
 			return true
 		}
