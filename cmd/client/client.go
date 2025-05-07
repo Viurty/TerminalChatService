@@ -80,11 +80,9 @@ func main() {
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
-			fmt.Println("Сервер завершил чат.")
 			break
 		}
 		if err != nil {
-			log.Printf("Recv error: %v", err)
 			break
 		}
 		if msg.GetIsServer() {
@@ -93,6 +91,4 @@ func main() {
 			fmt.Printf("[%s]: %s\n", msg.GetName(), msg.GetText())
 		}
 	}
-
-	fmt.Println("Клиент завершил работу.")
 }

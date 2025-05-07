@@ -55,9 +55,9 @@ func (s *server) printMessage(msg *pb.ChatMessage, sender pb.ChatService_ChatSer
 		Text:     msg.GetText(),
 	}
 	for _, u := range s.clients {
-		// if u.StreamUser == sender {
-		// 	continue
-		// }
+		if u.StreamUser == sender {
+			continue
+		}
 		if err := u.StreamUser.Send(response); err != nil {
 			log.Printf("Ошибка: %v", err)
 		}
@@ -102,7 +102,7 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 					u.Warn = 3
 					s.clients[ban_login] = u
 					s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", u.StreamUser)
-					log.Printf("User %s был забанен", ban_login)
+					log.Printf("User %s был забанен", ban_login) // это для тестов
 				}
 				s.mu.Unlock()
 			}
@@ -145,15 +145,17 @@ func (s *server) AuthUser(ctx context.Context, req *pb.LoginRequest) (*pb.LoginR
 
 // Проверка на сдержание запрещенных слов
 func isBan(words []string, msg string) bool {
+	flag := false
 	for _, word := range words {
 		if word == "" {
 			continue
 		}
-		if strings.Contains(msg, word) {
-			return true
+		if strings.Contains(msg, strings.TrimSpace(word)) {
+			flag = true
+			break
 		}
 	}
-	return false
+	return flag
 }
 
 type wrappedServerStream struct {
