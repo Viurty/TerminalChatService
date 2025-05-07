@@ -55,9 +55,9 @@ func (s *server) printMessage(msg *pb.ChatMessage, sender pb.ChatService_ChatSer
 		Text:     msg.GetText(),
 	}
 	for _, u := range s.clients {
-		if u.StreamUser == sender {
-			continue
-		}
+		// if u.StreamUser == sender {
+		// 	continue
+		// }
 		if err := u.StreamUser.Send(response); err != nil {
 			log.Printf("Ошибка: %v", err)
 		}

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Проверяем пароль + возвращаем роль
 func CheckPassword(lines []string, name, password string) (bool, string) {
 	hashPassword := ""
 	role := ""
@@ -26,11 +27,13 @@ func CheckPassword(lines []string, name, password string) (bool, string) {
 	return err == nil, role
 }
 
+// Шифруем пароль
 func encryptPassword(password string) string {
 	hashPassword, _ := bcrypt.GenerateFromPassword([]byte(password), 12)
 	return string(hashPassword)
 }
 
+// Записываем нового пользователя
 func WritePassword(name, role, password, pathFile string) {
 	file, err := os.OpenFile(pathFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

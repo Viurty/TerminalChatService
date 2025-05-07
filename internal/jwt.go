@@ -18,6 +18,7 @@ type Claims struct {
 
 type ctxKey struct{}
 
+// Создаем JWT
 func GenerateJWT(login, role string) (string, error) {
 	now := time.Now()
 	claims := Claims{
@@ -33,6 +34,7 @@ func GenerateJWT(login, role string) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
+// Читаем метаданные
 func ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -50,10 +52,12 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
+// Обновляем контекст с учетом метаданных
 func SaveClaims(ctx context.Context, c *Claims) context.Context {
 	return context.WithValue(ctx, ctxKey{}, c)
 }
 
+// Получаем метаданные из контекста
 func GetClaims(ctx context.Context) *Claims {
 	v := ctx.Value(ctxKey{})
 	claims, ok := v.(*Claims)
