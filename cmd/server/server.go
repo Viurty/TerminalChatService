@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -10,30 +11,41 @@ import (
 	"sync"
 
 	pb "example.com/myapp/api"
+	"example.com/myapp/internal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type user struct {
+	StreamUser pb.ChatService_ChatServer
+	Warn       int
+}
 
 type server struct {
 	pb.UnimplementedChatServiceServer
 	mu        sync.RWMutex
-	clients   map[pb.ChatService_ChatServer]int //хранит всех пользователей как ключи и количество их нарушений как значение
+	clients   map[string]user //хранит все логины как ключи и структуру(stream+warn) как значение
 	ban_words []string
+	passwords []string
 }
 
-func (s *server) addClient(stream pb.ChatService_ChatServer) {
+// Добавляем пользователя в словарь, чтобы в дальнейшем можно было сделать всем рассылку сообщений
+func (s *server) addUser(login string, stream pb.ChatService_ChatServer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.clients[stream] = 0
+	s.clients[login] = user{StreamUser: stream, Warn: 0}
 }
 
-func (s *server) removeClient(stream pb.ChatService_ChatServer) {
+// Удаляем пользователя при любом выходе(чтобы не хранить мусорные подключения)
+func (s *server) removeUser(login string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.clients, stream)
+	delete(s.clients, login)
 }
 
+// Отправляет всем пользователям сообщение (кроме отправителя)
 func (s *server) printMessage(msg *pb.ChatMessage, sender pb.ChatService_ChatServer) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -42,38 +54,21 @@ func (s *server) printMessage(msg *pb.ChatMessage, sender pb.ChatService_ChatSer
 		Name:     msg.GetName(),
 		Text:     msg.GetText(),
 	}
-	for client := range s.clients {
-		if client == sender {
+	for _, u := range s.clients {
+		if u.StreamUser == sender {
 			continue
 		}
-		if err := client.Send(response); err != nil {
+		if err := u.StreamUser.Send(response); err != nil {
 			log.Printf("Ошибка: %v", err)
 		}
 	}
 }
 
-func (s *server) printWarn(client pb.ChatService_ChatServer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// Отправляет внутренние сообщения от сервера
+func (s *server) printFromServer(text string, client pb.ChatService_ChatServer) {
 	response := &pb.ChatMessage{
 		IsServer: true,
-		Name:     "Warn",
-		Text:     "ОШИБКА: Нельзя ругаться",
-	}
-	s.clients[client] += 1
-	if err := client.Send(response); err != nil {
-		log.Printf("Ошибка: %v", err)
-	}
-
-}
-
-func (s *server) printBan(client pb.ChatService_ChatServer) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	response := &pb.ChatMessage{
-		IsServer: true,
-		Name:     "Ban",
-		Text:     "ОШИБКА: Ты больше не можешь писать в этот чат",
+		Text:     text,
 	}
 	if err := client.Send(response); err != nil {
 		log.Printf("Ошибка: %v", err)
@@ -81,9 +76,11 @@ func (s *server) printBan(client pb.ChatService_ChatServer) {
 
 }
 
+// Вся логика чаттинга
 func (s *server) Chat(stream pb.ChatService_ChatServer) error {
-	s.addClient(stream)
-	defer s.removeClient(stream)
+	claims := internal.GetClaims(stream.Context())
+	s.addUser(claims.Login, stream)
+	defer s.removeUser(claims.Login)
 
 	for {
 		msg, err := stream.Recv()
@@ -93,17 +90,55 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 		if err != nil {
 			return status.Errorf(codes.Internal, "Ошибка: %v", err)
 		}
+		msg.Name = claims.Login
+		msg.Role = claims.Role
+		if strings.HasPrefix(msg.Text, "/ban ") {
+			if msg.Role != "admin" {
+				s.printFromServer("ОШИБКА: Ты не администратор", stream)
+			} else {
+				ban_login := strings.Split(msg.Text, " ")[1]
+				s.mu.Lock()
+				if u, exists := s.clients[ban_login]; exists {
+					u.Warn = 3
+					s.clients[ban_login] = u
+				}
+				s.mu.Unlock()
+			}
+			continue
+		}
 
-		if s.clients[stream] == 3 {
-			s.printBan(stream)
+		s.mu.RLock()
+		current := s.clients[msg.Name]
+		s.mu.RUnlock()
+		if current.Warn >= 3 {
+			s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", stream)
 		} else if isBan(s.ban_words, msg.GetText()) {
-			s.printWarn(stream)
+			s.printFromServer("ОШИБКА: Нельзя ругаться", stream)
+			s.mu.Lock()
+			current = s.clients[msg.Name]
+			current.Warn++
+			s.clients[msg.Name] = current
+			s.mu.Unlock()
 		} else {
 			s.printMessage(msg, stream)
 		}
 	}
 }
 
+// Авторизует пользователя
+func (s *server) AuthUser(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
+	isAuth, role := internal.CheckPassword(s.passwords, req.Login, req.Password)
+	var err error
+	token := ""
+	if isAuth {
+		token, err = internal.GenerateJWT(req.Login, role)
+	} else {
+		return nil, status.Error(codes.Unauthenticated, "authorization failed")
+	}
+	return &pb.LoginResponse{Token: token}, err
+}
+
+// Проверка на сдержание запрещенных слов
 func isBan(words []string, msg string) bool {
 	for _, word := range words {
 		if word == "" {
@@ -116,28 +151,70 @@ func isBan(words []string, msg string) bool {
 	return false
 }
 
+type wrappedServerStream struct {
+	grpc.ServerStream
+	WrappedContext context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context {
+	return w.WrappedContext
+}
+
+// middleware, который сохраняет метаданные в контекст от JTW
+func authInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	md, ok := metadata.FromIncomingContext(ss.Context())
+	if !ok {
+		return status.Error(codes.Unauthenticated, "no metadata")
+	}
+	values := md["authorization"]
+	if len(values) == 0 {
+		return status.Error(codes.Unauthenticated, "missing token")
+	}
+
+	token := values[0]
+	if len(token) > 7 && strings.ToLower(token[:7]) == "bearer " {
+		token = token[7:]
+	}
+
+	claims, err := internal.ValidateToken(token)
+	if err != nil {
+		return status.Error(codes.Unauthenticated, "invalid token")
+	}
+
+	wrapped := &wrappedServerStream{
+		ServerStream:   ss,
+		WrappedContext: internal.SaveClaims(ss.Context(), claims),
+	}
+
+	return handler(srv, wrapped)
+}
+
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintf(os.Stderr, "Ожидаемый ввод: %s <address> <file_path>\n", os.Args[0])
+	if len(os.Args) != 4 {
+		fmt.Fprintf(os.Stderr, "Ожидаемый ввод: %s <address> <file path with ban words> <file path with passwords>\n", os.Args[0])
 		os.Exit(1)
 	}
-	address := os.Args[1]
-	file_path := os.Args[2]
+	address, ban_filepath, password_filepath := os.Args[1], os.Args[2], os.Args[3]
 
-	data, err := os.ReadFile(file_path)
+	data, err := os.ReadFile(password_filepath)
 	if err != nil {
 		log.Printf("Не удалось прочитать файл: %v", err)
 	}
-	text := string(data)
-	words := strings.Split(text, "\n")
+	passwords := strings.Split(string(data), "\n")
+
+	data, err = os.ReadFile(ban_filepath)
+	if err != nil {
+		log.Printf("Не удалось прочитать файл: %v", err)
+	}
+	words := strings.Split(string(data), "\n")
 
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		log.Fatalf("Ошибка запуска слушателя: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
-	pb.RegisterChatServiceServer(grpcServer, &server{clients: make(map[pb.ChatService_ChatServer]int), ban_words: words})
+	grpcServer := grpc.NewServer(grpc.StreamInterceptor(authInterceptor))
+	pb.RegisterChatServiceServer(grpcServer, &server{clients: make(map[string]user), ban_words: words, passwords: passwords})
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Fatalf("Ошибка работы gRPC-сервера: %v", err)
 	}
