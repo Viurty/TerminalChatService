@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Не удалось подключиться: %v", err)
 	}
-	defer conn.Close()e
+	defer conn.Close()
 
 	client := pb.NewChatServiceClient(conn)
 
