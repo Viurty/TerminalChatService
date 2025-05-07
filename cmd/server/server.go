@@ -55,9 +55,9 @@ func (s *server) printMessage(msg *pb.ChatMessage, sender pb.ChatService_ChatSer
 		Text:     msg.GetText(),
 	}
 	for _, u := range s.clients {
-		// if u.StreamUser == sender {
-		// 	continue
-		// }
+		if u.StreamUser == sender {
+			continue
+		}
 		if err := u.StreamUser.Send(response); err != nil {
 			log.Printf("Ошибка: %v", err)
 		}
@@ -113,6 +113,7 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 		s.mu.RUnlock()
 		if current.Warn >= 3 {
 			s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", stream)
+			continue
 		} else if isBan(s.ban_words, msg.GetText()) {
 			s.printFromServer("ОШИБКА: Нельзя ругаться", stream)
 			s.mu.Lock()
@@ -120,8 +121,10 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 			current.Warn++
 			s.clients[msg.Name] = current
 			s.mu.Unlock()
+			continue
 		} else {
 			s.printMessage(msg, stream)
+			continue
 		}
 	}
 }
