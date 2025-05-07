@@ -8,7 +8,7 @@ import (
 	jwt "github.com/golang-jwt/jwt/v4"
 )
 
-var jwtSecret = []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+var jwtSecret = []byte("AAAAAAAAAAAAds")
 
 type Claims struct {
 	Login string
