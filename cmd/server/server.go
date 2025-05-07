@@ -101,6 +101,7 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 				if u, exists := s.clients[ban_login]; exists {
 					u.Warn = 3
 					s.clients[ban_login] = u
+					s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", u.StreamUser)
 				}
 				s.mu.Unlock()
 			}
