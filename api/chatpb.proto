@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package api;
+
+option go_package = "./api";
+
+message ChatMessage {
+  string role = 1;
+  bool isServer = 2;
+  string name = 3;
+  string text = 4;
+}
+
+message LoginRequest {
+  string login    = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string token    = 1; 
+}
+
+service ChatService {
+  rpc Chat(stream ChatMessage) returns (stream ChatMessage);
+  rpc AuthUser(LoginRequest) returns (LoginResponse);
+}
