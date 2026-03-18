@@ -38,9 +38,12 @@ func main() {
 	req := &pb.LoginRequest{Login: name, Password: password}
 	resp, err := client.AuthUser(ctx, req)
 	if err != nil {
-		os.Exit(1)
+		log.Fatalf("Ошибка авторизации: %v", err)
 	}
 	token := resp.GetToken()
+	if token == "" {
+		log.Fatal("Ошибка авторизации: пустой токен")
+	}
 
 	//JWT + ctx
 	md := metadata.Pairs("authorization", "Bearer "+token)

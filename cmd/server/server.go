@@ -47,18 +47,23 @@ func (s *server) removeUser(login string) {
 
 // Отправляет всем пользователям сообщение (кроме отправителя)
 func (s *server) printMessage(msg *pb.ChatMessage, sender pb.ChatService_ChatServer) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	response := &pb.ChatMessage{
 		IsServer: false,
 		Name:     msg.GetName(),
 		Text:     msg.GetText(),
 	}
+	s.mu.RLock()
+	targetStreams := make([]pb.ChatService_ChatServer, 0, len(s.clients))
 	for _, u := range s.clients {
 		if u.StreamUser == sender {
 			continue
 		}
-		if err := u.StreamUser.Send(response); err != nil {
+		targetStreams = append(targetStreams, u.StreamUser)
+	}
+	s.mu.RUnlock()
+
+	for _, target := range targetStreams {
+		if err := target.Send(response); err != nil {
 			log.Printf("Ошибка: %v", err)
 		}
 	}
@@ -76,9 +81,20 @@ func (s *server) printFromServer(text string, client pb.ChatService_ChatServer) 
 
 }
 
+func parseBanCommand(text string) (string, bool) {
+	fields := strings.Fields(text)
+	if len(fields) != 2 || fields[0] != "/ban" {
+		return "", false
+	}
+	return fields[1], true
+}
+
 // Вся логика чаттинга
 func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 	claims := internal.GetClaims(stream.Context())
+	if claims == nil || claims.Login == "" {
+		return status.Error(codes.Unauthenticated, "missing claims")
+	}
 	s.addUser(claims.Login, stream)
 	defer s.removeUser(claims.Login)
 
@@ -92,26 +108,40 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 		}
 		msg.Name = claims.Login
 		msg.Role = claims.Role
-		if strings.HasPrefix(msg.Text, "/ban ") {
+		if strings.HasPrefix(msg.Text, "/ban") {
+			banLogin, ok := parseBanCommand(msg.Text)
+			if !ok {
+				s.printFromServer("ОШИБКА: формат команды /ban <login>", stream)
+				continue
+			}
 			if msg.Role != "admin" {
 				s.printFromServer("ОШИБКА: Ты не администратор", stream)
 			} else {
-				ban_login := strings.Split(msg.Text, " ")[1]
+				var bannedUserStream pb.ChatService_ChatServer
 				s.mu.Lock()
-				if u, exists := s.clients[ban_login]; exists {
+				if u, exists := s.clients[banLogin]; exists {
 					u.Warn = 3
-					s.clients[ban_login] = u
-					s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", u.StreamUser)
-					log.Printf("User %s был забанен", ban_login) // это для тестов
+					s.clients[banLogin] = u
+					bannedUserStream = u.StreamUser
 				}
 				s.mu.Unlock()
+
+				if bannedUserStream != nil {
+					s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", bannedUserStream)
+					log.Printf("User %s был забанен", banLogin) // это для тестов
+				} else {
+					s.printFromServer("ОШИБКА: Пользователь не найден", stream)
+				}
 			}
 			continue
 		}
 
 		s.mu.RLock()
-		current := s.clients[msg.Name]
+		current, exists := s.clients[msg.Name]
 		s.mu.RUnlock()
+		if !exists {
+			return status.Error(codes.Internal, "user session not found")
+		}
 		if current.Warn >= 3 {
 			s.printFromServer("ОШИБКА: Ты больше не можешь писать в этот чат", stream)
 			continue
@@ -133,29 +163,32 @@ func (s *server) Chat(stream pb.ChatService_ChatServer) error {
 // Авторизует пользователя
 func (s *server) AuthUser(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
 	isAuth, role := internal.CheckPassword(s.passwords, req.Login, req.Password)
-	var err error
-	token := ""
-	if isAuth {
-		token, err = internal.GenerateJWT(req.Login, role)
-	} else {
+	if !isAuth {
 		return nil, status.Error(codes.Unauthenticated, "authorization failed")
 	}
-	return &pb.LoginResponse{Token: token}, err
+
+	token, err := internal.GenerateJWT(req.Login, role)
+	if err != nil {
+		log.Printf("Ошибка генерации JWT: %v", err)
+		return nil, status.Error(codes.Internal, "failed to generate token")
+	}
+
+	return &pb.LoginResponse{Token: token}, nil
 }
 
 // Проверка на сдержание запрещенных слов
 func isBan(words []string, msg string) bool {
-	flag := false
+	msgLower := strings.ToLower(msg)
 	for _, word := range words {
+		word = strings.TrimSpace(word)
 		if word == "" {
 			continue
 		}
-		if strings.Contains(msg, strings.TrimSpace(word)) {
-			flag = true
-			break
+		if strings.Contains(msgLower, strings.ToLower(word)) {
+			return true
 		}
 	}
-	return flag
+	return false
 }
 
 type wrappedServerStream struct {
@@ -205,13 +238,13 @@ func main() {
 
 	data, err := os.ReadFile(password_filepath)
 	if err != nil {
-		log.Printf("Не удалось прочитать файл: %v", err)
+		log.Fatalf("Не удалось прочитать файл с паролями: %v", err)
 	}
 	passwords := strings.Split(string(data), "\n")
 
 	data, err = os.ReadFile(ban_filepath)
 	if err != nil {
-		log.Printf("Не удалось прочитать файл: %v", err)
+		log.Fatalf("Не удалось прочитать файл с бан-словами: %v", err)
 	}
 	words := strings.Split(string(data), "\n")
 

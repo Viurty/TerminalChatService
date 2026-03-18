@@ -3,12 +3,19 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	jwt "github.com/golang-jwt/jwt/v4"
 )
 
-var jwtSecret = []byte("AAAAAAAAAAAAds")
+func getJWTSecret() ([]byte, error) {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is not set")
+	}
+	return []byte(secret), nil
+}
 
 type Claims struct {
 	Login string
@@ -20,6 +27,11 @@ type ctxKey struct{}
 
 // Создаем JWT
 func GenerateJWT(login, role string) (string, error) {
+	secret, err := getJWTSecret()
+	if err != nil {
+		return "", err
+	}
+
 	now := time.Now()
 	claims := Claims{
 		Login: login,
@@ -31,16 +43,21 @@ func GenerateJWT(login, role string) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(secret)
 }
 
 // Читаем метаданные
 func ValidateToken(tokenString string) (*Claims, error) {
+	secret, err := getJWTSecret()
+	if err != nil {
+		return nil, err
+	}
+
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-		return jwtSecret, nil
+		return secret, nil
 	})
 	if err != nil {
 		return nil, err
